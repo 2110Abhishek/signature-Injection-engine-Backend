@@ -1,4 +1,3 @@
-// src/routes/pdfRoutes.js
 import express from "express";
 import multer from "multer";
 import path from "path";
@@ -24,7 +23,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 }, 
   fileFilter: (req, file, cb) => {
     if (file.mimetype !== "application/pdf") {
       return cb(new Error("Only PDF files are allowed"));
@@ -38,8 +37,8 @@ router.post("/upload-pdf", upload.single("pdf"), (req, res) => {
     const file = req.file;
     if (!file) return res.status(400).json({ error: "No file uploaded" });
 
-    const pdfId = file.filename; // use filename as id
-    const pdfUrl = `/pdf/${file.filename}`; // served by static route
+    const pdfId = file.filename;
+    const pdfUrl = `/pdf/${file.filename}`; 
 
     return res.json({ pdfId, pdfUrl });
   } catch (err) {
@@ -48,12 +47,6 @@ router.post("/upload-pdf", upload.single("pdf"), (req, res) => {
   }
 });
 
-// sign-pdf expects:
-// {
-//   pdfId: "16234512345.pdf",
-//   signatureImageBase64: "data:image/png;base64,....",
-//   fields: [{ type, pageIndex, xRel, yRel, wRel, hRel, value, checked }, ...]
-// }
 router.post("/sign-pdf", signPdf);
 
 export default router;

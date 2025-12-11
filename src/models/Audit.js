@@ -1,4 +1,3 @@
-// src/models/Audit.js
 import mongoose from "mongoose";
 
 const SignatureAuditSchema = new mongoose.Schema(

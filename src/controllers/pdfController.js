@@ -1,4 +1,3 @@
-// src/controllers/pdfController.js
 import path from "path";
 import fs from "fs/promises";
 import fsSync from "fs";
@@ -15,7 +14,7 @@ const signedDirectory = path.join(__dirname, "..", "uploads", "signed");
 
 const getSha256 = buffer => crypto.createHash("sha256").update(buffer).digest("hex");
 
-const MAX_SIG_BYTES = 2 * 1024 * 1024; // 2MB
+const MAX_SIG_BYTES = 2 * 1024 * 1024; 
 
 const decodeDataUrlImage = dataUrl => {
   if (!dataUrl || typeof dataUrl !== "string") throw new Error("Invalid signature image");
@@ -29,7 +28,6 @@ const decodeDataUrlImage = dataUrl => {
   return { buffer, isPng };
 };
 
-// Map normalized browser coords (xRel, yRel relative to top-left) to PDF bottom-left coords
 const mapBrowserToPdfBox = (page, coordinate) => {
   const pdfWidth = page.getWidth();
   const pdfHeight = page.getHeight();
@@ -48,7 +46,6 @@ const mapBrowserToPdfBox = (page, coordinate) => {
   const boxHeight = hRel * pdfHeight;
   const x = xRel * pdfWidth;
   const yTop = yRel * pdfHeight;
-  // PDF origin bottom-left:
   const y = pdfHeight - yTop - boxHeight;
 
   return { x, y, boxWidth, boxHeight };
@@ -85,7 +82,6 @@ export const signPdf = async (req, res) => {
 
     const pdfDoc = await PDFDocument.load(originalBytes);
 
-    // decode signature
     let sig;
     try {
       sig = decodeDataUrlImage(signatureImageBase64);
@@ -96,16 +92,12 @@ export const signPdf = async (req, res) => {
     const image = sig.isPng ? await pdfDoc.embedPng(sig.buffer) : await pdfDoc.embedJpg(sig.buffer);
     const pages = pdfDoc.getPages();
 
-    // iterate fields and draw
     for (const field of fields) {
       const pageIndex = Number(field.pageIndex || 0);
       if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= pages.length) {
-        // ignore invalid pageIndex but continue
         continue;
       }
       const page = pages[pageIndex];
-
-      // require normalized coords for each field
       if (typeof field.xRel !== "number" || typeof field.yRel !== "number" ||
           typeof field.wRel !== "number" || typeof field.hRel !== "number") {
         continue;
@@ -115,7 +107,7 @@ export const signPdf = async (req, res) => {
       if (field.type === "signature") {
         drawImageContained(page, image, box);
       } else if (field.type === "text" && field.value) {
-        const font = await pdfDoc.embedFont("Helvetica"); // fallback
+        const font = await pdfDoc.embedFont("Helvetica"); 
         const fontSize = 10;
         page.drawText(String(field.value), {
           x: box.x + 4,
@@ -134,7 +126,6 @@ export const signPdf = async (req, res) => {
           font
         });
       } else if (field.type === "radio" && field.checked) {
-        // draw filled circle
         const cx = box.x + box.boxWidth / 2;
         const cy = box.y + box.boxHeight / 2;
         const r = Math.min(box.boxWidth, box.boxHeight) / 4;
@@ -151,7 +142,6 @@ export const signPdf = async (req, res) => {
     const signedPath = path.join(signedDirectory, signedFilename);
     await fs.writeFile(signedPath, signedBytes);
 
-    // save audit (best-effort)
     try {
       await SignatureAudit.create({ pdfId, originalHash, signedHash });
     } catch (err) {
