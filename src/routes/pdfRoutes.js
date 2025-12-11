@@ -5,10 +5,9 @@ import fs from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { SignatureAudit } from "../models/SignatureAudit.js";
+import { SignatureAudit } from "../models/SignatureAudit.js"; 
 
 const router = express.Router();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -18,7 +17,6 @@ const signedDir = path.join(__dirname, "..", "uploads", "signed");
 fs.mkdirSync(originalDir, { recursive: true });
 fs.mkdirSync(signedDir, { recursive: true });
 
-
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, originalDir),
   filename: (req, file, cb) => {
@@ -27,7 +25,6 @@ const storage = multer.diskStorage({
     cb(null, `${timestamp}${Math.floor(Math.random() * 9000) + 1000}${ext}`);
   },
 });
-
 
 const fileFilter = (req, file, cb) => {
   const allowed = ["application/pdf", "application/x-pdf"];
@@ -39,30 +36,24 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
-
 
 function getBackendBaseUrl(req) {
   const envBackendUrl = (process.env.BACKEND_URL || "").replace(/\/+$/, "");
   if (envBackendUrl) return envBackendUrl;
 
- 
   const proto = (req.headers["x-forwarded-proto"] || req.protocol).split(",")[0].trim();
   const host = req.get("host");
   return `${proto}://${host}`;
 }
 
-
 router.post("/upload-pdf", upload.single("pdf"), (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     const pdfId = req.file.filename;
     const backendBase = getBackendBaseUrl(req);
@@ -86,30 +77,25 @@ router.post("/sign-pdf", async (req, res) => {
     }
 
     const originalPath = path.join(originalDir, pdfId);
-    if (!fs.existsSync(originalPath)) {
-      return res.status(404).json({ error: "Original PDF not found" });
-    }
+    if (!fs.existsSync(originalPath)) return res.status(404).json({ error: "Original PDF not found" });
 
     const originalBytes = fs.readFileSync(originalPath);
     const originalHash = crypto.createHash("sha256").update(originalBytes).digest("hex");
 
     const pdfDoc = await PDFDocument.load(originalBytes);
 
-   
     let base64Data = signatureImageBase64;
-    if (typeof base64Data !== "string") {
-      return res.status(400).json({ error: "signatureImageBase64 must be a base64 string" });
-    }
+    if (typeof base64Data !== "string") return res.status(400).json({ error: "signatureImageBase64 must be a base64 string" });
     if (base64Data.includes(",")) base64Data = base64Data.split(",")[1];
 
     const sigBytes = Buffer.from(base64Data, "base64");
 
-    const isPng = signatureImageBase64.startsWith("data:image/png") || signatureImageBase64.startsWith("iVBOR"); 
+    const isPng = signatureImageBase64.startsWith("data:image/png") || signatureImageBase64.startsWith("iVBOR");
     let signatureImage;
     try {
       signatureImage = isPng ? await pdfDoc.embedPng(sigBytes) : await pdfDoc.embedJpg(sigBytes);
     } catch (embedErr) {
-    
+      
       try {
         signatureImage = await pdfDoc.embedPng(sigBytes);
       } catch (err) {
@@ -134,7 +120,6 @@ router.post("/sign-pdf", async (req, res) => {
       const yBottomLeft = height - yFromTop - boxHeight;
 
       if (field.type === "signature") {
-        
         const sigDims = signatureImage.scale(1);
         const ratio = Math.min(boxWidth / sigDims.width, boxHeight / sigDims.height, 1);
         const drawWidth = sigDims.width * ratio;
@@ -177,7 +162,6 @@ router.post("/sign-pdf", async (req, res) => {
         });
       }
 
-      
       if (field.type === "radio" && field.checked) {
         const padding = Math.min(boxWidth, boxHeight) * 0.15;
         page.drawRectangle({
@@ -185,8 +169,6 @@ router.post("/sign-pdf", async (req, res) => {
           y: yBottomLeft + padding,
           width: Math.max(2, boxWidth - padding * 2),
           height: Math.max(2, boxHeight - padding * 2),
-          color: undefined,
-          borderColor: undefined,
         });
       }
     }
@@ -204,8 +186,9 @@ router.post("/sign-pdf", async (req, res) => {
         originalHash,
         signedHash,
       });
+      console.log("SignatureAudit saved for", pdfId);
     } catch (auditErr) {
-      console.warn("SignatureAudit save failed (non-fatal):", auditErr);
+      console.warn("SignatureAudit save failed (non-fatal):", auditErr && auditErr.message ? auditErr.message : auditErr);
     }
 
     const backendBase = getBackendBaseUrl(req);
