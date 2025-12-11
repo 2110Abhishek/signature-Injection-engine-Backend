@@ -1,10 +1,9 @@
 import path from "path";
-import fs from "fs/promises";
-import fsSync from "fs";
+import fs from "fs";
 import { PDFDocument } from "pdf-lib";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
-import { SignatureAudit } from "../models/Audit.js";
+import { Audit } from "../models/SignatureAudit.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,146 +11,125 @@ const __dirname = path.dirname(__filename);
 const pdfDirectory = path.join(__dirname, "..", "uploads", "original");
 const signedDirectory = path.join(__dirname, "..", "uploads", "signed");
 
-const getSha256 = buffer => crypto.createHash("sha256").update(buffer).digest("hex");
+const pdfMap = {
+  "sample-a4": path.join(pdfDirectory, "sample.pdf")
+};
 
-const MAX_SIG_BYTES = 2 * 1024 * 1024; 
+const getSha256 = buffer => {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+};
 
 const decodeDataUrlImage = dataUrl => {
-  if (!dataUrl || typeof dataUrl !== "string") throw new Error("Invalid signature image");
-  const match = dataUrl.match(/^data:(image\/png|image\/jpeg|image\/jpg);base64,(.+)$/);
-  if (!match) throw new Error("Invalid base64 image format");
-  const mime = match[1];
-  const base64 = match[2];
+  if (!dataUrl || typeof dataUrl !== "string") {
+    throw new Error("Invalid signature image");
+  }
+  const parts = dataUrl.split(",");
+  if (parts.length !== 2) {
+    throw new Error("Invalid base64 image format");
+  }
+  const meta = parts[0];
+  const base64 = parts[1];
+  const isPng = meta.includes("image/png");
+  const isJpg = meta.includes("image/jpeg") || meta.includes("image/jpg");
+  if (!isPng && !isJpg) {
+    throw new Error("Only PNG or JPEG signatures are supported");
+  }
   const buffer = Buffer.from(base64, "base64");
-  if (buffer.length > MAX_SIG_BYTES) throw new Error("Signature image too large");
-  const isPng = mime === "image/png";
   return { buffer, isPng };
 };
 
 const mapBrowserToPdfBox = (page, coordinate) => {
   const pdfWidth = page.getWidth();
   const pdfHeight = page.getHeight();
-
-  const xRel = Number(coordinate.xRel);
-  const yRel = Number(coordinate.yRel);
-  const wRel = Number(coordinate.wRel);
-  const hRel = Number(coordinate.hRel);
-
-  if ([xRel, yRel, wRel, hRel].some(n => Number.isNaN(n))) {
-    throw new Error("Invalid coordinate numbers");
-  }
-  if (wRel <= 0 || hRel <= 0) throw new Error("Invalid wRel/hRel");
-
+  const xRel = coordinate.xRel;
+  const yRel = coordinate.yRel;
+  const wRel = coordinate.wRel;
+  const hRel = coordinate.hRel;
   const boxWidth = wRel * pdfWidth;
   const boxHeight = hRel * pdfHeight;
   const x = xRel * pdfWidth;
   const yTop = yRel * pdfHeight;
   const y = pdfHeight - yTop - boxHeight;
-
   return { x, y, boxWidth, boxHeight };
 };
 
 const drawImageContained = (page, image, box) => {
-  const imgWidth = image.width || 1;
-  const imgHeight = image.height || 1;
+  const imgWidth = image.width;
+  const imgHeight = image.height;
   const scale = Math.min(box.boxWidth / imgWidth, box.boxHeight / imgHeight);
   const drawWidth = imgWidth * scale;
   const drawHeight = imgHeight * scale;
   const offsetX = box.x + (box.boxWidth - drawWidth) / 2;
   const offsetY = box.y + (box.boxHeight - drawHeight) / 2;
-  page.drawImage(image, { x: offsetX, y: offsetY, width: drawWidth, height: drawHeight });
+  page.drawImage(image, {
+    x: offsetX,
+    y: offsetY,
+    width: drawWidth,
+    height: drawHeight
+  });
 };
 
 export const signPdf = async (req, res) => {
   try {
-    const { pdfId, signatureImageBase64, fields } = req.body;
+    const { pdfId, signatureImageBase64, coordinate } = req.body;
 
-    if (!pdfId) return res.status(400).json({ error: "pdfId required" });
-    if (!signatureImageBase64) return res.status(400).json({ error: "signatureImageBase64 required" });
-    if (!Array.isArray(fields) || fields.length === 0) {
-      return res.status(400).json({ error: "fields array required" });
+    if (!pdfId || !signatureImageBase64 || !coordinate) {
+      return res.status(400).json({ message: "Missing payload fields" });
     }
 
-    const candidatePath = path.join(pdfDirectory, pdfId);
-    if (!fsSync.existsSync(candidatePath)) {
-      return res.status(404).json({ error: "Original PDF not found" });
+    const pdfPath = pdfMap[pdfId];
+    if (!pdfPath) {
+      return res.status(404).json({ message: "Unknown pdfId" });
     }
 
-    const originalBytes = await fs.readFile(candidatePath);
-    const originalHash = getSha256(originalBytes);
-
-    const pdfDoc = await PDFDocument.load(originalBytes);
-
-    let sig;
-    try {
-      sig = decodeDataUrlImage(signatureImageBase64);
-    } catch (err) {
-      return res.status(400).json({ error: err.message });
+    if (!fs.existsSync(pdfPath)) {
+      return res.status(404).json({ message: "Original PDF not found" });
     }
 
-    const image = sig.isPng ? await pdfDoc.embedPng(sig.buffer) : await pdfDoc.embedJpg(sig.buffer);
-    const pages = pdfDoc.getPages();
+    const originalBuffer = fs.readFileSync(pdfPath);
+    const originalHash = getSha256(originalBuffer);
 
-    for (const field of fields) {
-      const pageIndex = Number(field.pageIndex || 0);
-      if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= pages.length) {
-        continue;
-      }
-      const page = pages[pageIndex];
-      if (typeof field.xRel !== "number" || typeof field.yRel !== "number" ||
-          typeof field.wRel !== "number" || typeof field.hRel !== "number") {
-        continue;
-      }
+    const pdfDoc = await PDFDocument.load(originalBuffer);
+    const pageIndex = coordinate.pageIndex || 0;
+    const page = pdfDoc.getPage(pageIndex);
 
-      const box = mapBrowserToPdfBox(page, field);
-      if (field.type === "signature") {
-        drawImageContained(page, image, box);
-      } else if (field.type === "text" && field.value) {
-        const font = await pdfDoc.embedFont("Helvetica"); 
-        const fontSize = 10;
-        page.drawText(String(field.value), {
-          x: box.x + 4,
-          y: box.y + box.boxHeight / 2 - fontSize / 2,
-          size: fontSize,
-          font
-        });
-      } else if (field.type === "date") {
-        const font = await pdfDoc.embedFont("Helvetica");
-        const fontSize = 10;
-        const text = field.value || new Date().toLocaleDateString("en-GB");
-        page.drawText(text, {
-          x: box.x + 4,
-          y: box.y + box.boxHeight / 2 - fontSize / 2,
-          size: fontSize,
-          font
-        });
-      } else if (field.type === "radio" && field.checked) {
-        const cx = box.x + box.boxWidth / 2;
-        const cy = box.y + box.boxHeight / 2;
-        const r = Math.min(box.boxWidth, box.boxHeight) / 4;
-        page.drawCircle({ x: cx, y: cy, size: r, borderWidth: 0, color: undefined });
-        page.drawCircle({ x: cx, y: cy, size: r / 2 });
-      }
-    }
+    const { buffer: sigBuffer, isPng } = decodeDataUrlImage(
+      signatureImageBase64
+    );
+    const image = isPng
+      ? await pdfDoc.embedPng(sigBuffer)
+      : await pdfDoc.embedJpg(sigBuffer);
+
+    const box = mapBrowserToPdfBox(page, coordinate);
+    drawImageContained(page, image, box);
 
     const signedBytes = await pdfDoc.save();
     const signedHash = getSha256(signedBytes);
 
-    await fs.mkdir(signedDirectory, { recursive: true });
-    const signedFilename = `${path.parse(pdfId).name}-signed-${Date.now()}.pdf`;
-    const signedPath = path.join(signedDirectory, signedFilename);
-    await fs.writeFile(signedPath, signedBytes);
-
-    try {
-      await SignatureAudit.create({ pdfId, originalHash, signedHash });
-    } catch (err) {
-      console.error("Audit save failed:", err);
+    if (!fs.existsSync(signedDirectory)) {
+      fs.mkdirSync(signedDirectory, { recursive: true });
     }
 
-    const signedPdfUrl = `/signed/${signedFilename}`;
-    return res.json({ signedPdfUrl, originalHash, signedHash });
+    const fileName = `signed-${Date.now()}.pdf`;
+    const signedPath = path.join(signedDirectory, fileName);
+    fs.writeFileSync(signedPath, signedBytes);
+
+    const audit = await Audit.create({
+      pdfId,
+      originalHash,
+      signedHash,
+      originalPath: pdfPath,
+      signedPath
+    });
+
+    const signedPdfUrl = `/signed/${fileName}`;
+
+    return res.json({
+      signedPdfUrl,
+      auditId: audit._id
+    });
   } catch (err) {
-    console.error("signPdf error:", err);
-    return res.status(500).json({ error: "Failed to sign PDF" });
+    console.error(err);
+    return res.status(500).json({ message: "Failed to sign PDF" });
   }
 };
